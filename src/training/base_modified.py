@@ -9,7 +9,7 @@ import os
 # Externals
 import numpy as np
 import torch
-
+from accelerate import Accelerator
 
 class base(object):
     """
@@ -26,13 +26,14 @@ class base(object):
         self.distributed = distributed
         self.summaries = {}
 
-    def print_model_summary(self):
+    def print_model_summary(self,accelerator):
         """Override as needed"""
-        self.logger.info(
-            'Model: \n%s\nParameters: %i' %
-            (self.model, sum(p.numel()
-                             for p in self.model.parameters()))
-        )
+        if accelerator.is_main_process:
+            self.logger.info(
+                'Model: \n%s\nParameters: %i' %
+                (self.model, sum(p.numel()
+                                for p in self.model.parameters()))
+            )
 
     def get_model_fname(self, model):
         import hashlib
@@ -50,13 +51,14 @@ class base(object):
             summary_vals = self.summaries.get(key, [])
             self.summaries[key] = summary_vals + [val]
 
-    def write_summaries(self):
+    def write_summaries(self,accelerator):
         assert self.output_dir is not None
         summary_file = os.path.join(self.output_dir, 'summaries.npz')
-        self.logger.info('Saving summaries to %s' % summary_file)
+        if accelerator.is_main_process:
+           self.logger.info('Saving summaries to %s' % summary_file)
         np.savez(summary_file, **self.summaries)
 
-    def write_checkpoint(self, checkpoint_id, best=False):
+    def write_checkpoint(self, checkpoint_id, accelerator, best=False):
         """Write a checkpoint for the model"""
         assert self.output_dir is not None
         checkpoint_dir = os.path.join(self.output_dir, 'checkpoints')
@@ -67,14 +69,17 @@ class base(object):
         else:
             checkpoint_file = 'model_checkpoint_%s_%03i.pth.tar' % ( fname, checkpoint_id )
         os.makedirs(checkpoint_dir, exist_ok=True)
-        torch.save(dict(model=self.model.state_dict()),
-                   os.path.join(checkpoint_dir, checkpoint_file))
+        accelerator.wait_for_everyone()
+        unwrapped_model = accelerator.unwrap_model(self.model)
+        accelerator.save(unwrapped_model.state_dict(), os.path.join(checkpoint_dir, checkpoint_file))
+        # torch.save(dict(model=self.model.state_dict()),
+        #            os.path.join(checkpoint_dir, checkpoint_file))
 
     def build_model(self):
         """Virtual method to construct the model(s)"""
         raise NotImplementedError
 
-    def train_epoch(self, data_loader):
+    def train_epoch(self, data_loader, accelerator=None):
         """Virtual method to train a model"""
         raise NotImplementedError
 
@@ -82,7 +87,7 @@ class base(object):
         """Virtual method to evaluate a model"""
         raise NotImplementedError
 
-    def train(self, train_data_loader, n_epochs, valid_data_loader=None):
+    def train(self, train_data_loader, n_epochs, accelerator, valid_data_loader=None):
         """Run the model training"""
 
         # Loop over epochs
@@ -91,27 +96,31 @@ class base(object):
         i = 0
         # for i in range(n_epochs):
         while (l_rate > 5e-8):
-            self.logger.info('Epoch %i' % i)
+            if accelerator.is_main_process:
+                self.logger.info('Epoch %i' % i)
             summary = dict(epoch=i)
             # Train on this epoch
-            sum_train = self.train_epoch(train_data_loader)
+            sum_train = self.train_epoch(train_data_loader,accelerator)
             l_rate = sum_train['lr']
             summary.update(sum_train)
             # Evaluate on this epoch
             sum_valid = None
             if valid_data_loader is not None:
-                sum_valid = self.evaluate(valid_data_loader)
+                sum_valid = self.evaluate(valid_data_loader,accelerator)
                 summary.update(sum_valid)
 
                 if sum_valid['valid_loss'] < best_valid_loss:
                     best_valid_loss = sum_valid['valid_loss']
-                    self.logger.debug('Checkpointing new best model with loss: %.5f', best_valid_loss)
-                    self.write_checkpoint(checkpoint_id=i,best=True)
+                    if accelerator.is_main_process:
+                        self.logger.debug('Checkpointing new best model with loss: %.5f', best_valid_loss)
+                    self.write_checkpoint(checkpoint_id=i,accelerator=accelerator,best=True)
 
             # Save summary, checkpoint
+            accelerator.wait_for_everyone()
             self.save_summary(summary)
             if self.output_dir is not None:
-                self.write_checkpoint(checkpoint_id=i)
+                self.write_checkpoint(checkpoint_id=i, accelerator=accelerator)
 
             i += 1
+        
         return self.summaries

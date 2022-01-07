@@ -20,6 +20,7 @@ torch.backends.cudnn.enabled = True
 from datasets.hitgraphs import HitGraphDataset
 from datasets.particle import TrackMLParticleTrackingDataset
 
+from accelerate import Accelerator
 import tqdm
 import argparse
 directed = False
@@ -28,26 +29,28 @@ bkg_weight = 1.0
 train_batch_size = 1
 valid_batch_size = 1
 n_epochs = 120
+num_workers = 8
 lr = 0.01
 hidden_dim = 64
 n_iters = 6
 
 from training.gnn_modified import GNNTrainer
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print('using device %s'%device)
+accelerator = Accelerator()
+# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = accelerator.device
+# print('using device %s'%device)
 
 import logging
 
 def main(args):
 
     path = osp.join(os.environ['GNN_TRAINING_DATA_ROOT'], args.dataset)
-    print(path)
+    accelerator.print(path)
     # full_dataset = HitGraphDataset(path, directed=directed, categorical=args.categorized)
 
     config_file = osp.join(path, 'config.yaml')
     with open(config_file) as f:
-        config = yaml.load(f)
+        config = yaml.safe_load(f)
         selection = config['selection']
         n_events = config['n_files']
 
@@ -77,17 +80,17 @@ def main(args):
 
     fulllen = len(full_dataset)
 
-    print(fulllen)
+    accelerator.print(fulllen)
 
     tv_frac = 0.20
     tv_num = math.ceil(fulllen*tv_frac)
     splits = np.cumsum([fulllen-tv_num,0,tv_num])
-    print(fulllen, splits)
+    accelerator.print(fulllen, splits)
 
     train_dataset = torch.utils.data.Subset(full_dataset,np.arange(start=0,stop=splits[0]))
     valid_dataset = torch.utils.data.Subset(full_dataset,np.arange(start=splits[1],stop=splits[2]))
-    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, pin_memory=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=valid_batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, pin_memory=True,num_workers=num_workers)
+    valid_loader = DataLoader(valid_dataset, batch_size=valid_batch_size, shuffle=False,num_workers=num_workers)
 
     train_samples = len(train_dataset)
     valid_samples = len(valid_dataset)
@@ -112,7 +115,7 @@ def main(args):
         the_weights = np.array([1.])
 
     trainer = GNNTrainer(category_weights = the_weights,
-                         output_dir='/raid/projects/atkinsn2/gnn_code/output/'+args.dataset, device=device)
+                         output_dir='/raid/projects/atkinsn2/GNN_code/output/'+args.dataset, device=device)
 
     trainer.logger.setLevel(logging.DEBUG)
     strmH = logging.StreamHandler()
@@ -132,13 +135,14 @@ def main(args):
     trainer.build_model(name=args.model, loss_func=args.loss,
                         optimizer=args.optimizer, learning_rate=args.lr, lr_scaling=lr_scaling,
                         input_dim=num_features, hidden_dim=args.hidden_dim, edge_dim=num_edge_attr, n_iters=args.n_iters,
+                        accelerator=accelerator,data_loader=train_loader,
                         output_dim=num_classes)
 
-    trainer.print_model_summary()
+    trainer.print_model_summary(accelerator)
 
-    train_summary = trainer.train(train_loader, n_epochs, valid_data_loader=valid_loader)
+    train_summary = trainer.train(train_loader, n_epochs, accelerator=accelerator, valid_data_loader=valid_loader)
 
-    print(train_summary)
+    accelerator.print(train_summary)
 
 
 if __name__ == "__main__":
