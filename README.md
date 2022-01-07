@@ -4,6 +4,8 @@ First thing you need to create the environment:
 
 `source install_pyg.sh`
 
+In the accelerate configuration select "no" for FP16 and DeepSpeed.
+
 Then you need to download the trackml data from https://www.kaggle.com/c/trackml-particle-identification/data
 
 unzip all the tarballs and place them all in one folder. Then we need to create the folder structure that pytorch-geometric expects. You will need to edit this file to the paths on your system
@@ -18,7 +20,7 @@ You are now ready to build and train a model.
 
 `source run.sh`
 
-This file calls scripts/heptrx_nnconv.py.  If you decided to name the folder under the training folder something other than test_run, you will need to edit run.sh to point to the correct folder, you can also call a different gnn model (see the comment out lines and mimic them). You will also need to change the path of the output folder inside heptrx_nnconv.py.
+This file calls scripts/heptrx_nnconv.py.  If you decided to name the folder under the training folder something other than test_run, you will need to edit run.sh to point to the correct folder, you can also call a different gnn model (see the comment out lines and mimic them). You will also need to change the path of the output folder inside heptrx_nnconv.py. Additionally, "num_workers" should be changed to the number of GPU's used for training (the same value given to the accelerate config).
 
 
 Once the graphs are built and the model is trained, you can calculate the tracking efficiencies by running:
