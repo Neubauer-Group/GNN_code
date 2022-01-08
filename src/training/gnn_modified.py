@@ -33,9 +33,8 @@ class GNNTrainer(base):
 
     def build_model(self, name='EdgeNet',
                     loss_func='binary_cross_entropy',
-                    optimizer='Adam', learning_rate=0.01, lr_scaling=None, lr_warmup_epochs=0,
-                    data_loader=None, accelerator=None,
-                    **model_args):
+                    optimizer='Adam', learning_rate=0.01, accelerator=None, lr_scaling=None, lr_warmup_epochs=0,
+                    data_loader=None, **model_args):
         """Instantiate our model"""
 
         # Construct the model
@@ -54,11 +53,12 @@ class GNNTrainer(base):
         if lr_scaling is not None:
             self.lr_scheduler = lr_scaling(self.optimizer)
         if data_loader != None and accelerator != None:
+            self.accelerator = accelerator
             self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
         
 
     # @profile
-    def train_epoch(self, data_loader, accelerator):
+    def train_epoch(self, data_loader):
         """Train for one epoch"""
         
         self.model.train()
@@ -68,8 +68,8 @@ class GNNTrainer(base):
         # Loop over training batches
         total = len(data_loader.dataset)
         batch_size = data_loader.batch_size
-        data_loader = accelerator.prepare(data_loader)
-        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))), disable=not accelerator.is_local_main_process)
+        data_loader = self.accelerator.prepare(data_loader)
+        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))), disable=not self.accelerator.is_local_main_process)
         cat_weights = self._category_weights
         
         acc_rate = 1.
@@ -100,7 +100,7 @@ class GNNTrainer(base):
             #    sub_batch_loss.backward()
             #    batch_loss += sub_batch_loss
             #    print(batch_loss)
-            accelerator.backward(batch_loss)
+            self.accelerator.backward(batch_loss)
             batch_loss_item = batch_loss.item()
             acc_loss += batch_loss_item
             sum_loss += batch_loss_item
@@ -116,14 +116,14 @@ class GNNTrainer(base):
         summary['lr'] = self.optimizer.param_groups[0]['lr']
         summary['train_time'] = time.time() - start_time
         summary['train_loss'] = acc_rate * sum_loss / (i + 1)
-        if accelerator.is_main_process:
+        if self.accelerator.is_main_process:
             self.logger.debug(' Processed %i batches', (i + 1))
             self.logger.info('  Training loss: %.5f', summary['train_loss'])
             self.logger.info('  Learning rate: %.5f', summary['lr'])
         return summary
 
     @torch.no_grad()
-    def evaluate(self, data_loader, accelerator = None):
+    def evaluate(self, data_loader):
         """"Evaluate the model"""
         self.model.zero_grad()
         torch.cuda.empty_cache()
@@ -136,8 +136,8 @@ class GNNTrainer(base):
         # Loop over batches
         total = len(data_loader.dataset)
         batch_size = data_loader.batch_size
-        data_loader = accelerator.prepare(data_loader)
-        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))), disable=not accelerator.is_local_main_process)
+        data_loader = self.accelerator.prepare(data_loader)
+        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))), disable=not self.accelerator.is_local_main_process)
         num = torch.zeros_like(self._category_weights).to(self.device)
         denm = torch.zeros_like(self._category_weights).to(self.device)
 
@@ -151,8 +151,8 @@ class GNNTrainer(base):
             # batch_input = data.to(self.device)
             single_target = data.y
             single_output = self.model(data)
-            batch_target = accelerator.pad_across_processes(single_target)
-            batch_output = accelerator.pad_across_processes(single_output)
+            batch_target = self.accelerator.pad_across_processes(single_target)
+            batch_output = self.accelerator.pad_across_processes(single_output)
 
             n_cats = batch_output.shape[1]
 
@@ -198,7 +198,7 @@ class GNNTrainer(base):
             #                  i, batch_loss.item(), matches.sum().item(),
             #                  matches.numel())
         torch.cuda.empty_cache()
-        if accelerator.is_main_process:
+        if self.accelerator.is_main_process:
             self.logger.debug('loss %.5f cat effs %s',sum_loss / (i + 1), np.array_str((num/denm).cpu().numpy()))
             self.logger.debug('loss %.5f cat confusions:\n %s',
                             sum_loss / (i + 1),
@@ -210,7 +210,7 @@ class GNNTrainer(base):
         summary['valid_time'] = time.time() - start_time
         summary['valid_loss'] = sum_loss / (i + 1)
         summary['valid_acc'] = sum_correct / sum_total
-        if accelerator.is_main_process:
+        if self.accelerator.is_main_process:
             self.logger.debug(' Processed %i samples in %i batches',
                             len(data_loader.sampler), i + 1)
             self.logger.info('  Validation loss: %.5f acc: %.5f' %
@@ -221,3 +221,4 @@ class GNNTrainer(base):
 def _test():
     t = GNNTrainer(output_dir='./')
     t.build_model()
+

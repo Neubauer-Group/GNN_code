@@ -115,7 +115,7 @@ def main(args):
         the_weights = np.array([1.])
 
     trainer = GNNTrainer(category_weights = the_weights,
-                         output_dir='/raid/projects/atkinsn2/GNN_code/output/'+args.dataset, device=device)
+                         output_dir='/raid/projects/atkinsn2/gnn_code/output/'+args.dataset, device=device)
 
     trainer.logger.setLevel(logging.DEBUG)
     strmH = logging.StreamHandler()
@@ -138,9 +138,9 @@ def main(args):
                         accelerator=accelerator,data_loader=train_loader,
                         output_dim=num_classes)
 
-    trainer.print_model_summary(accelerator)
+    trainer.print_model_summary()
 
-    train_summary = trainer.train(train_loader, n_epochs, accelerator=accelerator, valid_data_loader=valid_loader)
+    train_summary = trainer.train(train_loader, n_epochs, valid_data_loader=valid_loader)
 
     accelerator.print(train_summary)
 

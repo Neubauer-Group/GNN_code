@@ -127,12 +127,12 @@ def main(args):
 
     if (type == "edge_classifier"):
         if(N_attr == 4):
-            model_fname = '/raid/projects/atkinsn2/GNN_code/output/'+model_group+'/checkpoints/model_checkpoint_EdgeNetWithCategories_259587_d1ebe35288_atkinsn2.best.pth.tar'
+            model_fname = '/raid/projects/atkinsn2/gnn_code/output/'+model_group+'/checkpoints/model_checkpoint_EdgeNetWithCategories_259587_d1ebe35288_atkinsn2.best.pth.tar'
         else:
-            model_fname = '/raid/projects/atkinsn2/GNN_code/output/'+model_group+'/checkpoints/model_checkpoint_EdgeNetWithCategories_259075_140efb4178_atkinsn2.best.pth.tar'
+            model_fname = '/raid/projects/atkinsn2/gnn_code/output/'+model_group+'/checkpoints/model_checkpoint_EdgeNetWithCategories_259075_140efb4178_atkinsn2.best.pth.tar'
         mdl = EdgeNetWithCategories(input_dim=3, hidden_dim=64, edge_dim=N_attr, output_dim=2, n_iters=6).to('cuda:0')
     elif (type == "interaction_network"):
-        model_fname = '/raid/projects/atkinsn2/GNN_code/output/'+model_group+'/checkpoints/model_checkpoint_InteractionNetwork_6448_77ce67e079_atkinsn2.best.pth.tar'
+        model_fname = '/raid/projects/atkinsn2/gnn_code/output/'+model_group+'/checkpoints/model_checkpoint_InteractionNetwork_6448_77ce67e079_atkinsn2.best.pth.tar'
         mdl = InteractionNetwork(input_dim=3, hidden_dim=64, edge_dim=N_attr, output_dim=2, n_iters=6).to('cuda:0')
 
 

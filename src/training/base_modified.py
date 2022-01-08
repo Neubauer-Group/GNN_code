@@ -26,9 +26,9 @@ class base(object):
         self.distributed = distributed
         self.summaries = {}
 
-    def print_model_summary(self,accelerator):
+    def print_model_summary(self):
         """Override as needed"""
-        if accelerator.is_main_process:
+        if self.accelerator.is_main_process:
             self.logger.info(
                 'Model: \n%s\nParameters: %i' %
                 (self.model, sum(p.numel()
@@ -51,14 +51,14 @@ class base(object):
             summary_vals = self.summaries.get(key, [])
             self.summaries[key] = summary_vals + [val]
 
-    def write_summaries(self,accelerator):
+    def write_summaries(self):
         assert self.output_dir is not None
         summary_file = os.path.join(self.output_dir, 'summaries.npz')
-        if accelerator.is_main_process:
+        if self.accelerator.is_main_process:
            self.logger.info('Saving summaries to %s' % summary_file)
         np.savez(summary_file, **self.summaries)
 
-    def write_checkpoint(self, checkpoint_id, accelerator, best=False):
+    def write_checkpoint(self, checkpoint_id, best=False):
         """Write a checkpoint for the model"""
         assert self.output_dir is not None
         checkpoint_dir = os.path.join(self.output_dir, 'checkpoints')
@@ -69,9 +69,9 @@ class base(object):
         else:
             checkpoint_file = 'model_checkpoint_%s_%03i.pth.tar' % ( fname, checkpoint_id )
         os.makedirs(checkpoint_dir, exist_ok=True)
-        accelerator.wait_for_everyone()
-        unwrapped_model = accelerator.unwrap_model(self.model)
-        accelerator.save(unwrapped_model.state_dict(), os.path.join(checkpoint_dir, checkpoint_file))
+        self.accelerator.wait_for_everyone()
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        self.accelerator.save(unwrapped_model.state_dict(), os.path.join(checkpoint_dir, checkpoint_file))
         # torch.save(dict(model=self.model.state_dict()),
         #            os.path.join(checkpoint_dir, checkpoint_file))
 
@@ -79,15 +79,15 @@ class base(object):
         """Virtual method to construct the model(s)"""
         raise NotImplementedError
 
-    def train_epoch(self, data_loader, accelerator=None):
+    def train_epoch(self, data_loader):
         """Virtual method to train a model"""
         raise NotImplementedError
 
-    def evaluate(self, data_loader, extra_output=None):
+    def evaluate(self, data_loader):
         """Virtual method to evaluate a model"""
         raise NotImplementedError
 
-    def train(self, train_data_loader, n_epochs, accelerator, valid_data_loader=None):
+    def train(self, train_data_loader, n_epochs, valid_data_loader=None):
         """Run the model training"""
 
         # Loop over epochs
@@ -96,31 +96,32 @@ class base(object):
         i = 0
         # for i in range(n_epochs):
         while (l_rate > 5e-8):
-            if accelerator.is_main_process:
+            if self.accelerator.is_main_process:
                 self.logger.info('Epoch %i' % i)
             summary = dict(epoch=i)
             # Train on this epoch
-            sum_train = self.train_epoch(train_data_loader,accelerator)
+            sum_train = self.train_epoch(train_data_loader)
             l_rate = sum_train['lr']
             summary.update(sum_train)
             # Evaluate on this epoch
             sum_valid = None
             if valid_data_loader is not None:
-                sum_valid = self.evaluate(valid_data_loader,accelerator)
+                sum_valid = self.evaluate(valid_data_loader)
                 summary.update(sum_valid)
 
                 if sum_valid['valid_loss'] < best_valid_loss:
                     best_valid_loss = sum_valid['valid_loss']
-                    if accelerator.is_main_process:
+                    if self.accelerator.is_main_process:
                         self.logger.debug('Checkpointing new best model with loss: %.5f', best_valid_loss)
-                    self.write_checkpoint(checkpoint_id=i,accelerator=accelerator,best=True)
+                    self.write_checkpoint(checkpoint_id=i,best=True)
 
             # Save summary, checkpoint
-            accelerator.wait_for_everyone()
+            self.accelerator.wait_for_everyone()
             self.save_summary(summary)
             if self.output_dir is not None:
-                self.write_checkpoint(checkpoint_id=i, accelerator=accelerator)
+                self.write_checkpoint(checkpoint_id=i)
 
             i += 1
         
         return self.summaries
+
