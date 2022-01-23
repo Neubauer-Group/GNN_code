@@ -66,12 +66,13 @@ class base(object):
         checkpoint_file = ''
         if best:
             checkpoint_file = 'model_checkpoint_%s.best.pth.tar' % ( fname )
+            
         else:
             checkpoint_file = 'model_checkpoint_%s_%03i.pth.tar' % ( fname, checkpoint_id )
         os.makedirs(checkpoint_dir, exist_ok=True)
-        self.accelerator.wait_for_everyone()
-        unwrapped_model = self.accelerator.unwrap_model(self.model)
-        self.accelerator.save(unwrapped_model.state_dict(), os.path.join(checkpoint_dir, checkpoint_file))
+        if self.accelerator.is_local_main_process:
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            self.accelerator.save(unwrapped_model.state_dict(), os.path.join(checkpoint_dir, checkpoint_file)) # This line stalls when best=True occationally
         # torch.save(dict(model=self.model.state_dict()),
         #            os.path.join(checkpoint_dir, checkpoint_file))
 
@@ -107,21 +108,19 @@ class base(object):
             sum_valid = None
             if valid_data_loader is not None:
                 sum_valid = self.evaluate(valid_data_loader)
-                summary.update(sum_valid)
 
+                summary.update(sum_valid)
+                self.accelerator.wait_for_everyone()
                 if sum_valid['valid_loss'] < best_valid_loss:
                     best_valid_loss = sum_valid['valid_loss']
                     if self.accelerator.is_main_process:
                         self.logger.debug('Checkpointing new best model with loss: %.5f', best_valid_loss)
-                    self.write_checkpoint(checkpoint_id=i,best=True)
-
+                        self.write_checkpoint(checkpoint_id=i,best=True)
             # Save summary, checkpoint
             self.accelerator.wait_for_everyone()
             self.save_summary(summary)
             if self.output_dir is not None:
                 self.write_checkpoint(checkpoint_id=i)
-
             i += 1
         
         return self.summaries
-

@@ -55,12 +55,15 @@ class GNNTrainer(base):
         if data_loader != None and accelerator != None:
             self.accelerator = accelerator
             self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
+        else:
+            raise TypeError("accelerator must be an accelerate.accelerator")
         
 
     # @profile
     def train_epoch(self, data_loader):
         """Train for one epoch"""
-        
+        # self.accelerator.wait_for_everyone()
+        # print("waited")
         self.model.train()
         summary = dict()
         sum_loss = 0.
@@ -69,17 +72,16 @@ class GNNTrainer(base):
         total = len(data_loader.dataset)
         batch_size = data_loader.batch_size
         data_loader = self.accelerator.prepare(data_loader)
-        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))), disable=not self.accelerator.is_local_main_process)
-        cat_weights = self._category_weights
-        
+        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))))
+        cat_weights = self._category_weights.to(self.device)
         acc_rate = 1.
         acc_norm = 1./acc_rate
         acc_loss = 0.
         self.optimizer.zero_grad()
         for i,data in t:
             # data = data.to(self.device)
-            batch_target = data.y
-            batch_output = self.model(data)
+            batch_target = data.y.to(self.device)
+            batch_output = self.model(data).to(self.device)
             if self.loss_func == F.binary_cross_entropy:
                 #binary cross entropy expects a weight for each event in a batch
                 #categorical cross entropy ex
@@ -116,6 +118,7 @@ class GNNTrainer(base):
         summary['lr'] = self.optimizer.param_groups[0]['lr']
         summary['train_time'] = time.time() - start_time
         summary['train_loss'] = acc_rate * sum_loss / (i + 1)
+        self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
             self.logger.debug(' Processed %i batches', (i + 1))
             self.logger.info('  Training loss: %.5f', summary['train_loss'])
@@ -125,6 +128,7 @@ class GNNTrainer(base):
     @torch.no_grad()
     def evaluate(self, data_loader):
         """"Evaluate the model"""
+        self.accelerator.wait_for_everyone()
         self.model.zero_grad()
         torch.cuda.empty_cache()
         self.model.eval()
@@ -137,7 +141,7 @@ class GNNTrainer(base):
         total = len(data_loader.dataset)
         batch_size = data_loader.batch_size
         data_loader = self.accelerator.prepare(data_loader)
-        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))), disable=not self.accelerator.is_local_main_process)
+        t = tqdm.tqdm(enumerate(data_loader),total=int(math.ceil(total/(batch_size*data_loader.num_workers))))
         num = torch.zeros_like(self._category_weights).to(self.device)
         denm = torch.zeros_like(self._category_weights).to(self.device)
 
@@ -198,6 +202,7 @@ class GNNTrainer(base):
             #                  i, batch_loss.item(), matches.sum().item(),
             #                  matches.numel())
         torch.cuda.empty_cache()
+        self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
             self.logger.debug('loss %.5f cat effs %s',sum_loss / (i + 1), np.array_str((num/denm).cpu().numpy()))
             self.logger.debug('loss %.5f cat confusions:\n %s',
@@ -211,6 +216,7 @@ class GNNTrainer(base):
         summary['valid_loss'] = sum_loss / (i + 1)
         summary['valid_acc'] = sum_correct / sum_total
         if self.accelerator.is_main_process:
+            
             self.logger.debug(' Processed %i samples in %i batches',
                             len(data_loader.sampler), i + 1)
             self.logger.info('  Validation loss: %.5f acc: %.5f' %
@@ -221,4 +227,3 @@ class GNNTrainer(base):
 def _test():
     t = GNNTrainer(output_dir='./')
     t.build_model()
-

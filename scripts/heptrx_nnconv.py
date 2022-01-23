@@ -141,7 +141,7 @@ def main(args):
     trainer.print_model_summary()
 
     train_summary = trainer.train(train_loader, n_epochs, valid_data_loader=valid_loader)
-
+    accelerator.wait_for_everyone()
     accelerator.print(train_summary)
 
 
