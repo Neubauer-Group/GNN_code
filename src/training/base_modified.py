@@ -72,7 +72,8 @@ class base(object):
         os.makedirs(checkpoint_dir, exist_ok=True)
         if self.accelerator.is_local_main_process:
             unwrapped_model = self.accelerator.unwrap_model(self.model)
-            self.accelerator.save(unwrapped_model.state_dict(), os.path.join(checkpoint_dir, checkpoint_file)) # This line stalls when best=True occationally
+            self.accelerator.save(unwrapped_model.state_dict(), 
+                    os.path.join(checkpoint_dir, checkpoint_file))
         # torch.save(dict(model=self.model.state_dict()),
         #            os.path.join(checkpoint_dir, checkpoint_file))
 
