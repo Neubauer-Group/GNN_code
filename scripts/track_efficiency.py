@@ -34,7 +34,7 @@ def main(args):
     # pt_range = [args.pt_min, args.pt_max]
 
     with open(config_file) as f:
-        config = yaml.load(f)
+        config = yaml.safe_load(f)
         selection = config['selection']
         # n_events = config['n_files']
         n_events = 200
@@ -132,11 +132,11 @@ def main(args):
             model_fname = '/raid/projects/atkinsn2/gnn_code/output/'+model_group+'/checkpoints/model_checkpoint_EdgeNetWithCategories_259075_140efb4178_atkinsn2.best.pth.tar'
         mdl = EdgeNetWithCategories(input_dim=3, hidden_dim=64, edge_dim=N_attr, output_dim=2, n_iters=6).to('cuda:0')
     elif (type == "interaction_network"):
-        model_fname = '/raid/projects/atkinsn2/gnn_code/output/'+model_group+'/checkpoints/model_checkpoint_InteractionNetwork_6448_77ce67e079_atkinsn2.best.pth.tar'
+        model_fname = '/raid/projects/atkinsn2/gnn_code/output/'+model_group+'/checkpoints/model_checkpoint_DistributedDataParallel_6448_a44c1ec3d1_atkinsn2.best.pth.tar'
         mdl = InteractionNetwork(input_dim=3, hidden_dim=64, edge_dim=N_attr, output_dim=2, n_iters=6).to('cuda:0')
 
 
-    mdl.load_state_dict(torch.load(model_fname)['model'])
+    mdl.load_state_dict(torch.load(model_fname)) # Checkpointed model is unwrapped
     mdl.eval()
 
     # Initializing vectors

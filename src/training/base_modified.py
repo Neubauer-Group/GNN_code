@@ -9,7 +9,7 @@ import os
 # Externals
 import numpy as np
 import torch
-
+from accelerate import Accelerator
 
 class base(object):
     """
@@ -28,11 +28,12 @@ class base(object):
 
     def print_model_summary(self):
         """Override as needed"""
-        self.logger.info(
-            'Model: \n%s\nParameters: %i' %
-            (self.model, sum(p.numel()
-                             for p in self.model.parameters()))
-        )
+        if self.accelerator.is_main_process:
+            self.logger.info(
+                'Model: \n%s\nParameters: %i' %
+                (self.model, sum(p.numel()
+                                for p in self.model.parameters()))
+            )
 
     def get_model_fname(self, model):
         import hashlib
@@ -53,7 +54,8 @@ class base(object):
     def write_summaries(self):
         assert self.output_dir is not None
         summary_file = os.path.join(self.output_dir, 'summaries.npz')
-        self.logger.info('Saving summaries to %s' % summary_file)
+        if self.accelerator.is_main_process:
+           self.logger.info('Saving summaries to %s' % summary_file)
         np.savez(summary_file, **self.summaries)
 
     def write_checkpoint(self, checkpoint_id, best=False):
@@ -64,11 +66,16 @@ class base(object):
         checkpoint_file = ''
         if best:
             checkpoint_file = 'model_checkpoint_%s.best.pth.tar' % ( fname )
+            
         else:
             checkpoint_file = 'model_checkpoint_%s_%03i.pth.tar' % ( fname, checkpoint_id )
         os.makedirs(checkpoint_dir, exist_ok=True)
-        torch.save(dict(model=self.model.state_dict()),
-                   os.path.join(checkpoint_dir, checkpoint_file))
+        if self.accelerator.is_local_main_process:
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            self.accelerator.save(unwrapped_model.state_dict(), 
+                    os.path.join(checkpoint_dir, checkpoint_file))
+        # torch.save(dict(model=self.model.state_dict()),
+        #            os.path.join(checkpoint_dir, checkpoint_file))
 
     def build_model(self):
         """Virtual method to construct the model(s)"""
@@ -78,7 +85,7 @@ class base(object):
         """Virtual method to train a model"""
         raise NotImplementedError
 
-    def evaluate(self, data_loader, extra_output=None):
+    def evaluate(self, data_loader):
         """Virtual method to evaluate a model"""
         raise NotImplementedError
 
@@ -91,7 +98,8 @@ class base(object):
         i = 0
         # for i in range(n_epochs):
         while (l_rate > 5e-8):
-            self.logger.info('Epoch %i' % i)
+            if self.accelerator.is_main_process:
+                self.logger.info('Epoch %i' % i)
             summary = dict(epoch=i)
             # Train on this epoch
             sum_train = self.train_epoch(train_data_loader)
@@ -101,17 +109,19 @@ class base(object):
             sum_valid = None
             if valid_data_loader is not None:
                 sum_valid = self.evaluate(valid_data_loader)
-                summary.update(sum_valid)
 
+                summary.update(sum_valid)
+                self.accelerator.wait_for_everyone()
                 if sum_valid['valid_loss'] < best_valid_loss:
                     best_valid_loss = sum_valid['valid_loss']
-                    self.logger.debug('Checkpointing new best model with loss: %.5f', best_valid_loss)
-                    self.write_checkpoint(checkpoint_id=i,best=True)
-
+                    if self.accelerator.is_main_process:
+                        self.logger.debug('Checkpointing new best model with loss: %.5f', best_valid_loss)
+                        self.write_checkpoint(checkpoint_id=i,best=True)
             # Save summary, checkpoint
+            self.accelerator.wait_for_everyone()
             self.save_summary(summary)
             if self.output_dir is not None:
                 self.write_checkpoint(checkpoint_id=i)
-
             i += 1
+        
         return self.summaries
