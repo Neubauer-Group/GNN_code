@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.transforms as T
-from torch_geometric.loader import DataLoader
+from torch_geometric.data import DataLoader
 from torch_geometric.utils import normalized_cut
 from torch_geometric.nn import (NNConv, graclus, max_pool, max_pool_x,
                                 global_mean_pool)
@@ -20,7 +20,6 @@ torch.backends.cudnn.enabled = True
 from datasets.hitgraphs import HitGraphDataset
 from datasets.particle import TrackMLParticleTrackingDataset
 
-from accelerate import Accelerator
 import tqdm
 import argparse
 directed = False
@@ -29,28 +28,26 @@ bkg_weight = 1.0
 train_batch_size = 1
 valid_batch_size = 1
 n_epochs = 120
-num_workers = 8
 lr = 0.01
 hidden_dim = 64
 n_iters = 6
 
 from training.gnn_modified import GNNTrainer
-accelerator = Accelerator()
-# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-device = accelerator.device
-# print('using device %s'%device)
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print('using device %s'%device)
 
 import logging
 
 def main(args):
 
     path = osp.join(os.environ['GNN_TRAINING_DATA_ROOT'], args.dataset)
-    accelerator.print(path)
+    print(path)
     # full_dataset = HitGraphDataset(path, directed=directed, categorical=args.categorized)
 
     config_file = osp.join(path, 'config.yaml')
     with open(config_file) as f:
-        config = yaml.safe_load(f)
+        config = yaml.load(f)
         selection = config['selection']
         n_events = config['n_files']
 
@@ -61,6 +58,8 @@ def main(args):
                                                   eta_range=selection['eta_range'],
                                                   phi_slope_max=selection['phi_slope_max'],
                                                   z0_max=selection['z0_max'],
+                                                  diff_phi=selection['diff_phi'],
+                                                  diff_z=selection['diff_z'],
                                                   n_phi_sections=selection['n_phi_sections'],
                                                   n_eta_sections=selection['n_eta_sections'],
                                                   augments=selection['construct_augmented_graphs'],
@@ -68,11 +67,13 @@ def main(args):
                                                   hough=selection['hough_transform'],
                                                   noise=selection['noise'],
                                                   duplicates=selection['duplicates'],
+                                                  secondaries=selection['secondaries'],
                                                   layer_pairs_plus=selection['layer_pairs_plus'],
                                                   data_type=config['data_type'],
                                                   tracking=True,
                                                   mmap=selection['module_map'],
-                                                  n_workers=24,
+                                                  N_modules=selection['N_modules'],
+                                                  directed=selection['directed'],
                                                   n_tasks=10
                                                   )
     # full_dataset.process(reprocess=True)
@@ -80,17 +81,17 @@ def main(args):
 
     fulllen = len(full_dataset)
 
-    accelerator.print(fulllen)
+    print(fulllen)
 
     tv_frac = 0.20
     tv_num = math.ceil(fulllen*tv_frac)
     splits = np.cumsum([fulllen-tv_num,0,tv_num])
-    accelerator.print(fulllen, splits)
+    print(fulllen, splits)
 
     train_dataset = torch.utils.data.Subset(full_dataset,np.arange(start=0,stop=splits[0]))
     valid_dataset = torch.utils.data.Subset(full_dataset,np.arange(start=splits[1],stop=splits[2]))
-    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, pin_memory=True,num_workers=num_workers)
-    valid_loader = DataLoader(valid_dataset, batch_size=valid_batch_size, shuffle=False,num_workers=num_workers)
+    train_loader = DataLoader(train_dataset, batch_size=train_batch_size, pin_memory=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=valid_batch_size, shuffle=False)
 
     train_samples = len(train_dataset)
     valid_samples = len(valid_dataset)
@@ -115,7 +116,7 @@ def main(args):
         the_weights = np.array([1.])
 
     trainer = GNNTrainer(category_weights = the_weights,
-                         output_dir='/raid/projects/atkinsn2/gnn_code/output/'+args.dataset, device=device)
+                         output_dir='/data/gnn_code/hgcal_ldrd/output/'+args.dataset, device=device)
 
     trainer.logger.setLevel(logging.DEBUG)
     strmH = logging.StreamHandler()
@@ -135,14 +136,13 @@ def main(args):
     trainer.build_model(name=args.model, loss_func=args.loss,
                         optimizer=args.optimizer, learning_rate=args.lr, lr_scaling=lr_scaling,
                         input_dim=num_features, hidden_dim=args.hidden_dim, edge_dim=num_edge_attr, n_iters=args.n_iters,
-                        accelerator=accelerator,data_loader=train_loader,
                         output_dim=num_classes)
 
     trainer.print_model_summary()
 
     train_summary = trainer.train(train_loader, n_epochs, valid_data_loader=valid_loader)
-    accelerator.wait_for_everyone()
-    accelerator.print(train_summary)
+
+    print(train_summary)
 
 
 if __name__ == "__main__":
