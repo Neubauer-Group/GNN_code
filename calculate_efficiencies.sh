@@ -69,4 +69,70 @@
 # python track_efficiency.py --group='char_IN' --model='char_IN' --type='interaction_network' |& tee interaction_network_char.log
 
 
-python scripts/track_efficiency.py --group='test_run' --model='test_run' --type='interaction_network' |& tee track_efficiecny_test_run.log
+# python track_efficiency.py --group='edge_classifier_ext_barrel' --model='edge_classifier_ext_barrel' --type='edge_classifier' |& tee edge_classifier_ext_barrel-edge_classifier_ext_barrel.log
+# python track_efficiency.py --group='trackml_1gev_mm_50purity' --model='edge_classifier_ext_barrel' --type='edge_classifier' |& tee trackml_1gev_mm_50purity-edge_classifier_ext_barrel.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient' --model='edge_classifier_ext_barrel' --type='edge_classifier' |& tee trackml_1gev_mm_99efficient-edge_classifier_ext_barrel.log
+# python track_efficiency.py --group='edge_classifier_ext_barrel' --model='trackml_1gev_mm_50purity' --type='edge_classifier' |& tee edge_classifier_ext_barrel-trackml_1gev_mm_50purity.log
+# python track_efficiency.py --group='trackml_1gev_mm_50purity' --model='trackml_1gev_mm_50purity' --type='edge_classifier' |& tee trackml_1gev_mm_50purity-trackml_1gev_mm_50purity.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient' --model='trackml_1gev_mm_50purity' --type='edge_classifier' |& tee trackml_1gev_mm_99efficient-trackml_1gev_mm_50purity.log
+# python track_efficiency.py --group='edge_classifier_ext_barrel' --model='trackml_1gev_mm_99efficient' --type='edge_classifier' |& tee edge_classifier_ext_barrel-trackml_1gev_mm_99efficient.log
+# python track_efficiency.py --group='trackml_1gev_mm_50purity' --model='trackml_1gev_mm_99efficient' --type='edge_classifier' |& tee trackml_1gev_mm_50purity-trackml_1gev_mm_99efficient.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient' --model='trackml_1gev_mm_99efficient' --type='edge_classifier' |& tee trackml_1gev_mm_99efficient-trackml_1gev_mm_99efficient.log
+#
+# python track_efficiency.py --group='interaction_network_ext_barrel' --model='interaction_network_ext_barrel' --type='interaction_network' |& tee interaction_network_ext_barrel-interaction_network_ext_barrel.log
+# python track_efficiency.py --group='trackml_1gev_mm_50purity_IN' --model='interaction_network_ext_barrel' --type='interaction_network' |& tee trackml_1gev_mm_50purity_IN-interaction_network_ext_barrel.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient_IN' --model='interaction_network_ext_barrel' --type='interaction_network' |& tee trackml_1gev_mm_99efficient_IN-interaction_network_ext_barrel.log
+# python track_efficiency.py --group='interaction_network_ext_barrel' --model='trackml_1gev_mm_50purity_IN' --type='interaction_network' |& tee interaction_network_ext_barrel-trackml_1gev_mm_50purity_IN.log
+# python track_efficiency.py --group='trackml_1gev_mm_50purity_IN' --model='trackml_1gev_mm_50purity_IN' --type='interaction_network' |& tee trackml_1gev_mm_50purity_IN-trackml_1gev_mm_50purity_IN.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient_IN' --model='trackml_1gev_mm_50purity_IN' --type='interaction_network' |& tee trackml_1gev_mm_99efficient_IN-trackml_1gev_mm_50purity_IN.log
+# python track_efficiency.py --group='interaction_network_ext_barrel' --model='trackml_1gev_mm_99efficient_IN' --type='interaction_network' |& tee interaction_network_ext_barrel-trackml_1gev_mm_99efficient_IN.log
+# python track_efficiency.py --group='trackml_1gev_mm_50purity_IN' --model='trackml_1gev_mm_99efficient_IN' --type='interaction_network' |& tee trackml_1gev_mm_50purity_IN-trackml_1gev_mm_99efficient_IN.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient_IN' --model='trackml_1gev_mm_99efficient_IN' --type='interaction_network' |& tee trackml_1gev_mm_99efficient_IN-trackml_1gev_mm_99efficient_IN.log
+
+
+# python track_efficiency.py --group='edge_classifier_ext_barrel' --model='edge_classifier_ext_barrel' --type='edge_classifier' |& tee edge_classifier_ext_barrel-edge_classifier_ext_barrel.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient' --model='trackml_1gev_mm_99efficient' --type='edge_classifier' |& tee trackml_1gev_mm_99efficient-trackml_1gev_mm_99efficient.log
+# python track_efficiency.py --group='interaction_network_ext_barrel' --model='interaction_network_ext_barrel' --type='interaction_network' |& tee interaction_network_ext_barrel-interaction_network_ext_barrel.log
+# python track_efficiency.py --group='trackml_1gev_mm_99efficient_IN' --model='trackml_1gev_mm_99efficient_IN' --type='interaction_network' |& tee trackml_1gev_mm_99efficient_IN-trackml_1gev_mm_99efficient_IN.log
+
+# python track_efficiency.py -r --group='trackml_full' --model='trackml_1gev_mm_99efficient' --type='edge_classifier' |& tee trackml_full-trackml_1gev_mm_99efficient.log
+# python track_efficiency.py --group='trackml_full' --model='trackml_1gev_mm_99efficient' --type='edge_classifier'
+
+
+# python test_vector_builder.py --group='char_EC' --model='char_EC' --type='edge_classifier'
+
+# python test_vector_builder.py --group='test_geometric' --model='test_geometric' --type='edge_classifier'
+# python test_vector_builder.py -r --group='test_geometric' --model='test_geometric' --type='edge_classifier'
+# python test_vector_builder.py -r --group='test_atlas_charline' --model='test_atlas_charline' --type='edge_classifier'
+
+# python test_vector_builder.py --group='test_geometric' --model='test_geometric' --type='edge_classifier'
+
+
+# python cut_modules.py
+# python cut_modules_triplet.py
+# python test_vector_builder.py --group='test_atlas' --model='test_atlas' --type='edge_classifier'
+# python test_vector_builder.py --group='trackml_ichep' --model='trackml_ichep' --type='edge_classifier'
+
+# python test_vector_builder.py --group='test_atlas' --model='test_atlas' --type='edge_classifier'
+# python cut_modules.py
+# python track_efficiency.py -r --group='test_atlas' --model='edge_classifier_ext_barrel' --type='edge_classifier'
+
+# python track_efficiency.py --group='test_atlas' --model='edge_classifier_ext_barrel' --type='edge_classifier'
+
+# python track_efficiency.py --group='atlas_directed' --model='atlas_directed' --type='edge_classifier'
+# python track_efficiency.py --group='atlas_undirected' --model='atlas_undirected' --type='edge_classifier'
+# python track_efficiency.py --group='atlas_reflected' --model='atlas_reflected' --type='edge_classifier'
+
+# python track_efficiency.py --group='atlas_med_purity' --model='atlas_med_purity' --type='edge_classifier'
+
+# python cut_modules.py
+# python track_efficiency.py --group='atlas_primaries' --model='atlas_primaries' --type='edge_classifier'
+
+# python track_efficiency.py -r --group='test_atlas' --model='atlas_primaries' --type='edge_classifier'
+
+# python track_efficiency.py --group='atlas_triplet' --model='atlas_triplet' --type='edge_classifier'
+# python track_efficiency.py --group='atlas_out' --model='atlas_out' --type='edge_classifier'
+
+
+# python cut_modules_triplet.py
+python track_efficiency.py --group='trackml_ichep' --model='trackml_ichep' --type='edge_classifier'
