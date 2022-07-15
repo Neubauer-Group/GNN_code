@@ -2,10 +2,8 @@
 input_dir: /data/gnn_code/trackml-particle-identification/train_all
 output_dir: /data/gnn_code/heptrkx-gnn-tracking/output
 n_files: 8850
-# n_files: 8750
-# n_files: 1770
 # n_files: 200
-# n_files: 5
+# n_files: 1
 
 data_type: "TrackML"
 # data_type: "ATLAS"
@@ -13,70 +11,22 @@ data_type: "TrackML"
 
 # Graph building configuration
 selection:
-    # pt_min: 0.5 # GeV
-    # phi_slope_max: 0.000763   #99% efficient
-    # z0_max: 29.951            #99% efficient
-    # phi_slope_max: 0.000654   #98% efficient
-    # z0_max: 18.473            #98% efficient
-    # phi_slope_max: 0.000623   #97% efficient
-    # z0_max: 15.891            #97% efficient
-
-    # pt_min: 1.0 # GeV
-    phi_slope_max: 0.000424   #99% efficient
-    # z0_max: 18.057            #99% efficient
-    # phi_slope_max: 0.000354   #98% efficient
-    # z0_max: 15.006            #98% efficient
-    # phi_slope_max: 0.000328   #97% efficient
-    # z0_max: 13.523            #97% efficient
-
-    # pt_min: 1.5 # GeV
-    # phi_slope_max: 0.000310   #99% efficient
-    # z0_max: 16.563            #99% efficient
-    # phi_slope_max: 0.000257   #98% efficient
-    # z0_max: 14.128            #98% efficient
-    # phi_slope_max: 0.000234   #97% efficient
-    # z0_max: 12.959            #97% efficient
-
-    # pt_min: 2.0 # GeV
-    # phi_slope_max: 0.000262   #99% efficient
-    # z0_max: 15.693            #99% efficient
-    # phi_slope_max: 0.000212   #98% efficient
-    # z0_max: 13.696            #98% efficient
-    # phi_slope_max: 0.000189   #97% efficient
-    # z0_max: 12.652            #97% efficient
-
-    # pt_min: 2.5 # GeV
-    # phi_slope_max: 0.000247   #99% efficient
-    # z0_max: 15.473            #99% efficient
-    # phi_slope_max: 0.000189   #98% efficient
-    # z0_max: 13.342            #98% efficient
-    # phi_slope_max: 0.000164   #97% efficient
-    # z0_max: 12.300            #97% efficient
-
-    # pt_min: 3.0 # GeV
-    # phi_slope_max: 0.000242   #99% efficient
-    # z0_max: 15.135            #99% efficient
-    # phi_slope_max: 0.000179   #98% efficient
-    # z0_max: 13.133            #98% efficient
-    # phi_slope_max: 0.000151   #97% efficient
-    # z0_max: 12.132            #97% efficient
 
 
     #Original cut values used
     # pt_min: 0.5 # GeV
     # pt_range: [0.5, .inf] # GeV
     pt_range: [1.0, .inf] # GeV
+    # pt_range: [2.0, .inf] # GeV
     # phi_slope_max: 0.0006
-    z0_max: .inf
-    # z0_max: 15000
 
-    # phi_slope_max: 0.000763   #99% efficient
-    # z0_max: 29.951            #99% efficient
+    phi_slope_max: .0006
 
+    z0_max: 50.0
 
-    #Cut values used for tuning
-    # phi_slope_max: 0.002
-    # z0_max: 150
+    diff_phi: 0.00023
+
+    diff_z: .1
 
     n_phi_sections: 1
     n_eta_sections: 1
@@ -84,7 +34,7 @@ selection:
     # eta_range: [-100, 100]
 
     #Edges between barrel and endcap can intersect intermediate barrel layers
-    remove_intersecting_edges: True
+    remove_intersecting_edges: False
 
     #Construct Phi-Reflected versions of each graph (charge conjugate pairing)
     construct_augmented_graphs: True
@@ -99,6 +49,9 @@ selection:
     #Keep duplicate hits from same particle in same layer
     duplicates: False
 
+    #Keep hits from secondary particles (ATLAS only)
+    secondaries: False
+
     #Construct Edges within the same layer
     layer_pairs_plus: False
 
@@ -107,24 +60,37 @@ selection:
 
     #Build tracks using a module map
     module_map: True
+    N_modules: 3
+
+    #Build test vector out of events
+    test_vectors: False
+
+    # Create directed or undirected(2x edges) versions of graphs
+    directed: False
 
 
-    # TrackML Geometry
+    # # TrackML Geometry
     volume_layer_ids: [[8,2], [8,4], [8,6], [8,8],                              #barrel
                        [13,2], [13,4], [13,6], [13,8],                          #continued barrel
                        [9,2], [9,4], [9,6], [9,8], [9,10], [9,12], [9,14],      #front endcap
-                       [7,2], [7,4], [7,6], [7,8], [7,10], [7,12], [7,14]]      #back endcap
-
-    # volume_layer_ids: [[8,2], [8,4], [8,6], [8,8]]                              #barrel
-
-    layer_pairs : [[7, 8], [8, 9], [9, 10],                                     #barrel
-                   [10, 24], [24, 25], [25, 26],  [26, 27],                     #continued barrel
-                   [6, 24], [5, 24], [4, 24], [3, 24], [2, 24],                 #back endcap to continued barrel
-                   [11, 24], [12, 24], [13, 24], [14, 24], [15, 24],            #front endcap to continued barrel
-                   [7, 11], [8, 11], [9, 11], [10, 11],                         #barrel to front endcap
-                   [11, 12], [12, 13], [13, 14], [14, 15], [15, 16], [16, 17],  #front endcap
-                   [7, 6], [8, 6], [9, 6], [10, 6],                             #barrel to back endcap
-                   [6, 5], [5, 4], [4, 3], [3, 2], [2, 1], [1, 0]]              #back endcap
+                       [7,2], [7,4], [7,6], [7,8], [7,10], [7,12], [7,14],      #back endcap
+                       [12,2], [12,4], [12,6], [12,8], [12,10], [12,12],        # full detector
+                       [14,2], [14,4], [14,6], [14,8], [14,10], [14,12],        # full detector
+                       [16,2], [16,4], [16,6], [16,8], [16,10], [16,12],        # full detector
+                       [18,2], [18,4], [18,6], [18,8], [18,10], [18,12],        # full detector
+                       [17,2], [17,4]]                                          # full detector
+    #
+    #
+    # # volume_layer_ids: [[8,2], [8,4], [8,6], [8,8]]                              #barrel
+    #
+    layer_pairs : [[7, 8], [8, 9], [9, 10]]                                     #barrel
+                   # [10, 24], [24, 25], [25, 26],  [26, 27],                     #continued barrel
+                   # [6, 24], [5, 24], [4, 24], [3, 24], [2, 24],                 #back endcap to continued barrel
+                   # [11, 24], [12, 24], [13, 24], [14, 24], [15, 24],            #front endcap to continued barrel
+                   # [7, 11], [8, 11], [9, 11], [10, 11],                         #barrel to front endcap
+                   # [11, 12], [12, 13], [13, 14], [14, 15], [15, 16], [16, 17],  #front endcap
+                   # [7, 6], [8, 6], [9, 6], [10, 6],                             #barrel to back endcap
+                   # [6, 5], [5, 4], [4, 3], [3, 2], [2, 1], [1, 0]]              #back endcap
 
 
     # Endcaps Only
@@ -142,3 +108,14 @@ selection:
     #                    [13,0], [13,1], [13,2], [13,3]]                          #Outer Barrel
     # layer_pairs : [[0, 1], [1, 2], [2, 3], [3, 4],                              #Inner Barrel
     #                [4, 5], [5, 6], [6, 7], [7, 8]]                              #Outer Barrel
+
+    # ATLAS ItK Geometry
+    # volume_layer_ids: [[-2,0], [-2,1], [-2,2], [-2,3], [-2,4],
+    #                   [0,0], [0,1], [0,2], [0,3], [0,4],
+    #                   [2,0], [2,1], [2,2], [2,3], [2,4],
+    #                   [98,0], [98,1], [98,2], [98,3], [98,4], [98,5],
+    #                   [100,0], [100,1], [100,2], [100,3],
+    #                   [102,0], [102,1], [102,2], [102,3], [102,4], [102,5]]
+    #
+    # layer_pairs : [[0, 1], [1, 2], [2, 3], [3, 4],
+    #                [4, 5], [5, 6], [6, 7], [7, 8]]
