@@ -1,7 +1,7 @@
 import os.path as osp
 import glob
+import struct
 
-import copy as copy
 import multiprocessing as mp
 from tqdm import tqdm
 import random
@@ -110,12 +110,15 @@ class TrackMLParticleTrackingDataset(Dataset):
                  layer_pairs=[[7, 8], [8, 9], [9, 10]],             #Connected Layers
                  pt_range=[1.5, 2], eta_range=[-5, 5],              #Node Cuts
                  phi_slope_max=0.0006, z0_max=150,                  #Edge Cuts
+                 diff_phi=100, diff_z=100,                          #Triplet cuts
                  n_phi_sections=1, n_eta_sections=1,                #N Sections
                  augments=False, intersect=False,                   #Toggle Switches
                  hough=False, tracking=False,                       #Toggle Switches
                  noise=False, duplicates=False,                     #Truth Toggle Switches
+                 secondaries=True,
                  n_workers=mp.cpu_count(), n_tasks=1,               #multiprocessing
-                 mmap=False,                                        #module map
+                 mmap=False, N_modules=2,                           #module map
+                 test_vectors=False,                                #test vectors
                  data_type="TrackML"                                #Other Detectors
                  ):
         events = glob.glob(osp.join(osp.join(root, 'raw'), 'event*-truth.csv'))
@@ -126,6 +129,8 @@ class TrackMLParticleTrackingDataset(Dataset):
 
         self.data_type        = data_type
         self.mmap             = mmap
+        self.N_modules        = N_modules
+        self.tv               = test_vectors
 
         self.directed         = directed
         self.layer_pairs_plus = layer_pairs_plus
@@ -135,6 +140,8 @@ class TrackMLParticleTrackingDataset(Dataset):
         self.eta_range        = eta_range
         self.phi_slope_max    = phi_slope_max
         self.z0_max           = z0_max
+        self.diff_phi         = diff_phi
+        self.diff_z           = diff_z
         self.n_phi_sections   = n_phi_sections
         self.n_eta_sections   = n_eta_sections
         self.augments         = augments
@@ -142,6 +149,7 @@ class TrackMLParticleTrackingDataset(Dataset):
         self.hough            = hough
         self.noise            = noise
         self.duplicates       = duplicates
+        self.secondaries      = secondaries
         self.tracking         = tracking
         self.n_workers        = n_workers
         self.n_tasks          = n_tasks
@@ -396,9 +404,10 @@ class TrackMLParticleTrackingDataset(Dataset):
                 })
         elif self.data_type == "ATLAS":
             particles = pandas.read_csv(
-                particles_filename, usecols=['particle_id', 'px', 'py', 'pz', 'pt', 'eta', 'vx', 'vy', 'vz', 'radius', 'status', 'charge', 'pdgId', 'pass'],
+                particles_filename, usecols=['particle_id', 'barcode', 'px', 'py', 'pz', 'pt', 'eta', 'vx', 'vy', 'vz', 'radius', 'status', 'charge', 'pdgId', 'pass'],
                 dtype={
                     'particle_id': np.int64,
+                    'barcode': np.int64,
                     'px': np.float32,
                     'py': np.float32,
                     'pz': np.float32,
@@ -462,8 +471,6 @@ class TrackMLParticleTrackingDataset(Dataset):
         return truth
 
 
-    def build_module_map(self, hits, particles, truth):
-        return 1
 
     def select_hits(self, hits, particles, truth):
         # print('Selecting Hits')
@@ -473,7 +480,6 @@ class TrackMLParticleTrackingDataset(Dataset):
         layer = torch.from_numpy(20 * hits['volume_id'].values + hits['layer_id'].values)
         index = layer.unique(return_inverse=True)[1]
         hits = hits[['hit_id', 'x', 'y', 'z', 'module_id']].assign(layer=layer, index=index)
-
 
         valid_groups = hits.groupby(['layer'])
         hits = pandas.concat([valid_groups.get_group(valid_layer.numpy()[i]) for i in range(n_det_layers)])
@@ -496,7 +502,6 @@ class TrackMLParticleTrackingDataset(Dataset):
         eta = -1*np.log(np.tan(theta/2))
         hits = hits[['z', 'index', 'particle_id', 'module_id']].assign(r=r, phi=phi, eta=eta)
 
-
         # Splits out the noise hits from the true hits
         if self.noise:
             noise = hits.groupby(['particle_id']).get_group(0)
@@ -504,13 +509,11 @@ class TrackMLParticleTrackingDataset(Dataset):
 
         # Remove duplicate true hits within same layer
         if not self.duplicates:
-            # hits = hits.loc[hits.groupby(['particle_id', 'index'], as_index=False).r.idxmin()]
-            hits = hits.loc[hits.groupby(['particle_id', 'index'], as_index=False).r.idxmin().r.values.tolist()]
+            hits = hits.loc[hits.groupby(['particle_id', 'index'], as_index=False).r.idxmin()]
 
         # Append the noise hits back to the list
         if self.noise:
             hits = pandas.concat([noise, hits])
-
 
         r = torch.from_numpy(hits['r'].values)
         phi = torch.from_numpy(hits['phi'].values)
@@ -521,12 +524,26 @@ class TrackMLParticleTrackingDataset(Dataset):
         module = torch.from_numpy(hits['module_id'].values)
         pos = torch.stack([r, phi, z], 1)
 
+        if (self.tv):
+            hits = hits.sort_values(['index', 'module_id'])
+
+            r_tv = torch.from_numpy(hits['r'].values)
+            phi_tv = torch.from_numpy(hits['phi'].values)
+            z_tv = torch.from_numpy(hits['z'].values)
+            layer_tv = torch.from_numpy(hits['index'].values)
+            module_tv = torch.from_numpy(hits['module_id'].values)
+            pos_tv = torch.stack([r_tv, phi_tv, z_tv], 1)
+            self.create_test_vector(layer_tv, module_tv, pos_tv)
+
+        if (self.mmap):
+            layer = layer*100000+module
 
         return pos, layer, particle, eta
 
 
     def select_hits_atlas(self, particles, truth):
         # print('Selecting Hits')
+
         valid_layer = 20 * self.volume_layer_ids[:,0] + self.volume_layer_ids[:,1]
         n_det_layers = len(valid_layer)
 
@@ -534,10 +551,18 @@ class TrackMLParticleTrackingDataset(Dataset):
 
         layer = torch.from_numpy(20 * truth['barrel_endcap'].values + truth['layer_disk'].values)
         index = layer.unique(return_inverse=True)[1]
-        truth = truth[['hit_id', 'x', 'y', 'z', 'particle_id']].assign(layer=layer, index=index)
+        truth = truth[['hit_id', 'x', 'y', 'z', 'particle_id', 'eta_module', 'phi_module']].assign(layer=layer, index=index)
+
+        eta_id = truth['eta_module'].values
+        phi_id = truth['phi_module'].values
+        mod_id = 256*eta_id + phi_id
+        truth = truth[['hit_id', 'x', 'y', 'z', 'particle_id', 'layer', 'index']].assign(module_id=mod_id)
 
         valid_groups = truth.groupby(['layer'])
         truth = pandas.concat([valid_groups.get_group(valid_layer.numpy()[i]) for i in range(n_det_layers)])
+
+        if not self.secondaries:
+            particles = particles[particles['barcode'].values < 200000]
 
         pt = particles['pt'].values/1000
         particles = particles[np.bitwise_and(pt > self.pt_range[0], pt < self.pt_range[1])]
@@ -553,7 +578,7 @@ class TrackMLParticleTrackingDataset(Dataset):
         phi = np.arctan2(hits['y'].values, hits['x'].values)
         theta = np.arctan2(r,hits['z'].values)
         eta = -1*np.log(np.tan(theta/2))
-        hits = hits[['z', 'index', 'particle_id']].assign(r=r, phi=phi, eta=eta)
+        hits = hits[['z', 'index', 'particle_id', 'module_id']].assign(r=r, phi=phi, eta=eta)
 
         # Splits out the noise hits from the true hits
         if self.noise:
@@ -562,7 +587,55 @@ class TrackMLParticleTrackingDataset(Dataset):
 
         # Remove duplicate true hits within same layer
         if not self.duplicates:
+            endcap_0 = hits.groupby(['index']).get_group(0)
+            hits = hits.drop(hits.groupby(['index']).get_group(0).index)
+            endcap_1 = hits.groupby(['index']).get_group(1)
+            hits = hits.drop(hits.groupby(['index']).get_group(1).index)
+            endcap_2 = hits.groupby(['index']).get_group(2)
+            hits = hits.drop(hits.groupby(['index']).get_group(2).index)
+            endcap_3 = hits.groupby(['index']).get_group(3)
+            hits = hits.drop(hits.groupby(['index']).get_group(3).index)
+            endcap_4 = hits.groupby(['index']).get_group(4)
+            hits = hits.drop(hits.groupby(['index']).get_group(4).index)
+            endcap_10 = hits.groupby(['index']).get_group(10)
+            hits = hits.drop(hits.groupby(['index']).get_group(10).index)
+            endcap_11 = hits.groupby(['index']).get_group(11)
+            hits = hits.drop(hits.groupby(['index']).get_group(11).index)
+            endcap_12 = hits.groupby(['index']).get_group(12)
+            hits = hits.drop(hits.groupby(['index']).get_group(12).index)
+            endcap_13 = hits.groupby(['index']).get_group(13)
+            hits = hits.drop(hits.groupby(['index']).get_group(13).index)
+            endcap_14 = hits.groupby(['index']).get_group(14)
+            hits = hits.drop(hits.groupby(['index']).get_group(14).index)
+
+            # endcap_15 = hits.groupby(['index']).get_group(15)
+            # hits = hits.drop(hits.groupby(['index']).get_group(15).index)
+            # endcap_16 = hits.groupby(['index']).get_group(16)
+            # hits = hits.drop(hits.groupby(['index']).get_group(16).index)
+            # endcap_17 = hits.groupby(['index']).get_group(17)
+            # hits = hits.drop(hits.groupby(['index']).get_group(17).index)
+            # endcap_18 = hits.groupby(['index']).get_group(18)
+            # hits = hits.drop(hits.groupby(['index']).get_group(18).index)
+            # endcap_19 = hits.groupby(['index']).get_group(19)
+            # hits = hits.drop(hits.groupby(['index']).get_group(19).index)
+            # endcap_20 = hits.groupby(['index']).get_group(20)
+            # hits = hits.drop(hits.groupby(['index']).get_group(20).index)
+            # endcap_25 = hits.groupby(['index']).get_group(25)
+            # hits = hits.drop(hits.groupby(['index']).get_group(25).index)
+            # endcap_26 = hits.groupby(['index']).get_group(26)
+            # hits = hits.drop(hits.groupby(['index']).get_group(26).index)
+            # endcap_27 = hits.groupby(['index']).get_group(27)
+            # hits = hits.drop(hits.groupby(['index']).get_group(27).index)
+            # endcap_28 = hits.groupby(['index']).get_group(28)
+            # hits = hits.drop(hits.groupby(['index']).get_group(28).index)
+            # endcap_29 = hits.groupby(['index']).get_group(29)
+            # hits = hits.drop(hits.groupby(['index']).get_group(29).index)
+            # endcap_30 = hits.groupby(['index']).get_group(30)
+            # hits = hits.drop(hits.groupby(['index']).get_group(30).index)
+
             hits = hits.loc[hits.groupby(['particle_id', 'index'], as_index=False).r.idxmin()]
+            hits = pandas.concat([hits, endcap_0, endcap_1, endcap_2, endcap_3, endcap_4, endcap_10, endcap_11, endcap_12, endcap_13, endcap_14])
+            # hits = pandas.concat([hits, endcap_0, endcap_1, endcap_2, endcap_3, endcap_4, endcap_10, endcap_11, endcap_12, endcap_13, endcap_14, endcap_15, endcap_16, endcap_17, endcap_18, endcap_19, endcap_20, endcap_25, endcap_26, endcap_27, endcap_28, endcap_29, endcap_30])
 
         # Append the noise hits back to the list
         if self.noise:
@@ -575,16 +648,91 @@ class TrackMLParticleTrackingDataset(Dataset):
         eta = torch.from_numpy(hits['eta'].values)
         layer = torch.from_numpy(hits['index'].values)
         particle = torch.from_numpy(hits['particle_id'].values)
+        module = torch.from_numpy(hits['module_id'].values)
         pos = torch.stack([r, phi, z], 1)
+
+        if (self.tv):
+            hits = hits.sort_values(['index', 'module_id'])
+
+            r_tv = torch.from_numpy(hits['r'].values)
+            phi_tv = torch.from_numpy(hits['phi'].values)
+            z_tv = torch.from_numpy(hits['z'].values)
+            layer_tv = torch.from_numpy(hits['index'].values)
+            module_tv = torch.from_numpy(hits['module_id'].values)
+            pos_tv = torch.stack([r_tv, phi_tv, z_tv], 1)
+            self.create_test_vector(layer_tv, module_tv, pos_tv)
+
+        if (self.mmap):
+            layer = layer*100000+module
 
         return pos, layer, particle, eta
 
 
-    def compute_edge_index(self, pos, layer):
-        # print("Constructing Edge Index")
+
+    def create_test_vector(self, layer, module, pos):
+        tv_file = open("/data/gnn_code/tv.txt", "w")
+        n_hits = layer.size(0)
+        for ii in range(n_hits):
+            if ii == 0:
+                current_layer = layer[ii]
+                current_module = module[ii]
+                module_word = self.create_module_word(layer[ii], module[ii])
+                hit_word    = self.create_hit_word(pos[ii])
+                tv_file.write(module_word)
+                tv_file.write('\n')
+                tv_file.write(hit_word)
+                tv_file.write('\n')
+
+            else:
+                if (layer[ii] == current_layer and module[ii] == current_module):
+                    hit_word    = self.create_hit_word(pos[ii])
+                    tv_file.write(hit_word)
+                    tv_file.write('\n')
+                else:
+                    current_layer = layer[ii]
+                    current_module = module[ii]
+                    module_word = self.create_module_word(layer[ii], module[ii])
+                    hit_word    = self.create_hit_word(pos[ii])
+                    tv_file.write(module_word)
+                    tv_file.write('\n')
+                    tv_file.write(hit_word)
+                    tv_file.write('\n')
+        tv_file.close()
+
+
+
+    def create_module_word(self, layer, module):
+        return "8" + format(layer, "07x") + format(module, "08x")
+
+
+
+    def create_hit_word(self, pos):
+        r   = format(struct.unpack('<H', struct.pack('<e', pos[0].item()))[0], "04x")
+        phi = format(struct.unpack('<H', struct.pack('<e', pos[1].item()))[0], "04x")
+        z   = format(struct.unpack('<H', struct.pack('<e', pos[2].item()))[0], "04x")
+        return "0000" + r + phi + z
+
+
+
+    def compute_edge_index(self, pos, layer, particle):
+        # print("Constructing Doublet Edge Index")
         edge_indices = torch.empty(2,0, dtype=torch.long)
 
-        layer_pairs = self.layer_pairs
+        if (self.mmap):
+            if (self.data_type == "TrackML"):
+                data = np.load('module_map_cut.npz')
+                # data = np.load('module_map_full_cut.npz')
+                # data = np.load('module_map_full_dup_cut.npz')
+            elif (self.data_type == "ATLAS"):
+                data = np.load('module_map_atlas_cut.npz')
+            module_map = data[data.files[0]]
+
+            col1 = 100000*module_map[:,0] + module_map[:,1]
+            col2 = 100000*module_map[:,2] + module_map[:,3]
+            layer_pairs = torch.from_numpy(np.column_stack((col1, col2)))
+        else:
+            layer_pairs = self.layer_pairs
+
         if self.layer_pairs_plus:
             layers = layer.unique()
             layer_pairs_plus = torch.tensor([[layers[i],layers[i]] for i in range(layers.shape[0])])
@@ -593,6 +741,9 @@ class TrackMLParticleTrackingDataset(Dataset):
         for (layer1, layer2) in layer_pairs:
             mask1 = layer == layer1
             mask2 = layer == layer2
+            if (torch.sum(mask1) == 0 or torch.sum(mask2) == 0):
+                continue   #one of the modules/layers is empty
+
             nnz1 = mask1.nonzero().flatten()
             nnz2 = mask2.nonzero().flatten()
 
@@ -664,7 +815,7 @@ class TrackMLParticleTrackingDataset(Dataset):
                     intersected_layer = r_int.abs() > 384.5
                     # intersected_layer = r_int > 384.5 & r_int < 967.8
 
-            adj = (phi_slope.abs() < self.phi_slope_max) & (z0.abs() < self.z0_max) & (intersected_layer == False)
+            adj = (phi_slope.abs() <= self.phi_slope_max) & (z0.abs() <= self.z0_max) & (intersected_layer == False)
 
             row, col = adj.nonzero().t()
             row = nnz1[row]
@@ -672,6 +823,126 @@ class TrackMLParticleTrackingDataset(Dataset):
             edge_index = torch.stack([row, col], dim=0)
 
             edge_indices = torch.cat((edge_indices, edge_index), 1)
+        return edge_indices
+
+
+    def compute_edge_index_triplet(self, pos, module, particle):
+        # print("Constructing Triplet Edge Index")
+        edge_indices = torch.empty(2,0, dtype=torch.long)
+
+        if (self.mmap):
+            if (self.data_type == "TrackML"):
+                data = np.load('module_map_tml_cut_triplet.npz')
+            elif (self.data_type == "ATLAS"):
+                data = np.load('module_map_atlas_cut_triplet.npz')
+            module_map = data[data.files[0]]
+
+            col1 = 100000*module_map[:,0] + module_map[:,1]
+            col2 = 100000*module_map[:,2] + module_map[:,3]
+            col3 = 100000*module_map[:,4] + module_map[:,5]
+            module_triplets = torch.from_numpy(np.column_stack((col1, col2, col3)))
+        else:
+            print("Triplet edge construction requires module map")
+
+        for (module1, module2, module3) in module_triplets:
+            mask1 = module == module1
+            mask2 = module == module2
+            mask3 = module == module3
+            if(module1 == module2 or module1 == module3 or module2 == module3):
+                continue   #require unique modules
+            if (torch.sum(mask1) == 0 or torch.sum(mask2) == 0 or torch.sum(mask3) == 0):
+                continue   #one of the modules is empty
+
+            nnz1 = mask1.nonzero().flatten()
+            nnz2 = mask2.nonzero().flatten()
+            nnz3 = mask3.nonzero().flatten()
+
+            for ctr in nnz2:
+
+                ### Algorithm 1
+                ### This algorithm is faster if the cuts are quite loose
+                # dr_bot   = pos[ctr,0] - pos[:, 0][mask1].view(1, -1) + 0* pos[:, 0][mask3].view(-1, 1)
+                # dphi_bot = pos[ctr,1] - pos[:, 1][mask1].view(1, -1) + 0* pos[:, 1][mask3].view(-1, 1)
+                # dz_bot   = pos[ctr,2] - pos[:, 2][mask1].view(1, -1) + 0* pos[:, 2][mask3].view(-1, 1)
+                # dr_top   = -pos[ctr,0] - 0 * pos[:, 0][mask1].view(1, -1) + pos[:, 0][mask3].view(-1, 1)
+                # dphi_top = -pos[ctr,1] - 0 * pos[:, 1][mask1].view(1, -1) + pos[:, 1][mask3].view(-1, 1)
+                # dz_top   = -pos[ctr,2] - 0 * pos[:, 2][mask1].view(1, -1) + pos[:, 2][mask3].view(-1, 1)
+                #
+                # dphi_bot[dphi_bot > np.pi] -= 2 * np.pi
+                # dphi_bot[dphi_bot < -np.pi] += 2 * np.pi
+                # dphi_top[dphi_top > np.pi] -= 2 * np.pi
+                # dphi_top[dphi_top < -np.pi] += 2 * np.pi
+                #
+                # phi_slope_bot = dphi_bot / dr_bot
+                # phi_slope_top = dphi_top / dr_top
+                # diff_phi = phi_slope_top - phi_slope_bot
+                #
+                # z_slope_bot = dz_bot / dr_bot
+                # z_slope_top = dz_top / dr_top
+                # diff_z = z_slope_top - z_slope_bot
+                #
+                # z0_bot = pos[ctr,2] - pos[ctr,0]*z_slope_bot
+                # z0_top = pos[ctr,2] - pos[ctr,0]*z_slope_top
+                #
+                # adj = (phi_slope_bot.abs() <= self.phi_slope_max) & (phi_slope_top.abs() <= self.phi_slope_max) & (z0_bot.abs() <= self.z0_max) & (z0_top.abs() <= self.z0_max) & (diff_phi.abs() <= self.diff_phi) & (diff_z.abs() <= self.diff_z)
+                #
+                # row, col = adj.nonzero().t()
+                # if row.shape[0] == 0: continue
+                #
+                # bot = nnz1[col]
+                # mid = torch.ones(bot.shape[0], dtype=torch.int64)*ctr
+                # top = nnz3[row]
+                #
+                # edge_index = torch.stack([bot, mid], dim=0)
+                # edge_indices = torch.cat((edge_indices, edge_index), 1)
+                # edge_index = torch.stack([mid, top], dim=0)
+                # edge_indices = torch.cat((edge_indices, edge_index), 1)
+
+                ### Algorithm 2
+                ### This algorithm is faster if the cuts are really tight
+
+                for bot in nnz1:
+                    dr_bot   = pos[ctr,0] - pos[bot,0]
+                    dphi_bot = pos[ctr,1] - pos[bot,1]
+                    dz_bot   = pos[ctr,2] - pos[bot,2]
+                    if(dphi_bot > np.pi):
+                        dphi_bot -= 2*np.pi
+                    elif(dphi_bot < -np.pi):
+                        dphi_bot += 2*np.pi
+
+                    #Bottom Segment Doublet cuts
+                    phi_slope_bot = dphi_bot / dr_bot
+                    if phi_slope_bot.abs() > self.phi_slope_max: continue
+                    z_slope_bot = dz_bot / dr_bot
+                    z0_bot = pos[bot,2] - pos[bot,0] * z_slope_bot
+                    if z0_bot.abs() > self.z0_max: continue
+
+                    for top in nnz3:
+                        dr_top   = pos[top,0] - pos[ctr,0]
+                        dphi_top = pos[top,1] - pos[ctr,1]
+                        dz_top   = pos[top,2] - pos[ctr,2]
+                        if(dphi_top > np.pi):
+                            dphi_top -= 2*np.pi
+                        elif(dphi_top < -np.pi):
+                            dphi_top += 2*np.pi
+
+                        #Top Segment Doublet cuts
+                        phi_slope_top = dphi_top / dr_top
+                        if phi_slope_top.abs() > self.phi_slope_max: continue
+                        z_slope_top = dz_top / dr_top
+                        z0_top = pos[ctr,2] - pos[ctr,0] * z_slope_top
+                        if z0_top.abs() > self.z0_max: continue
+
+                        #Triplet cuts
+                        diff_phi = phi_slope_top - phi_slope_bot
+                        if (diff_phi > self.diff_phi): continue
+                        diff_z = z_slope_top - z_slope_bot
+                        if (diff_z > self.diff_z): continue
+
+                        edge_indices = torch.cat((edge_indices, torch.tensor([[bot, ctr], [ctr, top]])), 1)
+
+        #Remove any duplicate edges created
+        edge_indices = torch.unique(edge_indices, dim=1)
 
         return edge_indices
 
@@ -730,6 +1001,236 @@ class TrackMLParticleTrackingDataset(Dataset):
         return hits, particles, truth
 
 
+
+    def construct_module_map(self):
+        print('Constructing Module Map')
+
+        module_map = []
+
+        for idx, val in tqdm(enumerate(self.events)):
+            hits, particles, truth = self.read_event(self.events[idx])
+
+            valid_layer = 20 * self.volume_layer_ids[:,0] + self.volume_layer_ids[:,1]
+            n_det_layers = len(valid_layer)
+
+            layer = torch.from_numpy(20 * hits['volume_id'].values + hits['layer_id'].values)
+            index = layer.unique(return_inverse=True)[1]
+            hits = hits[['hit_id', 'x', 'y', 'z', 'module_id']].assign(layer=layer, index=index)
+
+            valid_groups = hits.groupby(['layer'])
+            hits = pandas.concat([valid_groups.get_group(valid_layer.numpy()[i]) for i in range(n_det_layers)])
+
+            pt = np.sqrt(particles['px'].values**2 + particles['py'].values**2)
+            particles = particles[np.bitwise_and(pt > self.pt_range[0], pt < self.pt_range[1])]
+
+            hits = (hits[['hit_id', 'x', 'y', 'z', 'module_id', 'index']].merge(truth[['hit_id', 'particle_id']], on='hit_id'))
+            hits = (hits.merge(particles[['particle_id']], on='particle_id'))
+
+            r = np.sqrt(hits['x'].values**2 + hits['y'].values**2)
+            hits = hits[['index', 'particle_id', 'module_id']].assign(r=r)
+
+            # Remove duplicate true hits within same layer
+            if not self.duplicates:
+                hits = hits.loc[hits.groupby(['particle_id', 'index'], as_index=False).r.idxmin()]
+
+            hits = hits.sort_values(by=['particle_id', 'r'])
+
+            layer = torch.from_numpy(hits['index'].values)
+            particle = torch.from_numpy(hits['particle_id'].values)
+            module = torch.from_numpy(hits['module_id'].values)
+
+            for ii in range(particle.shape[0]-self.N_modules+1):
+                if (self.N_modules==2 and particle[ii] == particle[ii+1]):
+                    connection = np.array([layer[ii].numpy(), module[ii].numpy(), layer[ii+1].numpy(), module[ii+1].numpy()])
+                    module_map.append(connection)
+                if (self.N_modules==3 and particle[ii] == particle[ii+1] and particle[ii] == particle[ii+2]):
+                    connection = np.array([layer[ii].numpy(), module[ii].numpy(), layer[ii+1].numpy(), module[ii+1].numpy(), layer[ii+2].numpy(), module[ii+2].numpy()])
+                    module_map.append(connection)
+
+
+        module_map = np.array(module_map)
+        module_map, counts = np.unique(module_map, return_counts=True, axis=0)
+        module_map = np.concatenate((module_map, counts[:,None]), axis=1)
+
+        # np.savez_compressed('/data/gnn_code/module_map.npz', module_map)
+        # np.savetxt('/data/gnn_code/module_map.csv', module_map, delimiter=',')
+        # np.savez_compressed('/data/gnn_code/module_map_full.npz', module_map)
+        # np.savetxt('/data/gnn_code/module_map_full.csv', module_map, delimiter=',')
+        np.savez_compressed('/data/gnn_code/module_map_tml_triplet.npz', module_map)
+        np.savetxt('/data/gnn_code/module_map_tml_triplet.csv', module_map, delimiter=',')
+
+
+
+
+    def construct_module_map_atlas(self):
+        print('Constructing Module Map ATLAS')
+
+        module_map = []
+
+        diff_phir = []
+        diff_zr = []
+
+        for idx, val in tqdm(enumerate(self.events)):
+            hits, particles, truth = self.read_event(self.events[idx])
+
+            valid_layer = 20 * self.volume_layer_ids[:,0] + self.volume_layer_ids[:,1]
+            n_det_layers = len(valid_layer)
+
+            truth.loc[truth['hardware'] == 'STRIP','barrel_endcap'] = truth.loc[truth['hardware'] == 'STRIP','barrel_endcap'] + 100
+
+            layer = torch.from_numpy(20 * truth['barrel_endcap'].values + truth['layer_disk'].values)
+            index = layer.unique(return_inverse=True)[1]
+            truth = truth[['hit_id', 'x', 'y', 'z', 'particle_id', 'eta_module', 'phi_module']].assign(layer=layer, index=index)
+
+            eta_id = truth['eta_module'].values
+            phi_id = truth['phi_module'].values
+            mod_id = 256*eta_id + phi_id
+            truth = truth[['hit_id', 'x', 'y', 'z', 'particle_id', 'layer', 'index']].assign(module_id=mod_id)
+
+            valid_groups = truth.groupby(['layer'])
+            truth = pandas.concat([valid_groups.get_group(valid_layer.numpy()[i]) for i in range(n_det_layers)])
+
+            if not self.secondaries:
+                particles = particles[particles['barcode'].values < 200000]
+
+            pt = particles['pt'].values/1000
+            particles = particles[np.bitwise_and(pt > self.pt_range[0], pt < self.pt_range[1])]
+
+            hits = (truth.merge(particles[['particle_id']], on='particle_id'))
+
+            r = np.sqrt(hits['x'].values**2 + hits['y'].values**2)
+            # hits = hits[['index', 'particle_id', 'module_id']].assign(r=r)
+            phi = np.arctan2(hits['y'].values, hits['x'].values)
+            hits = hits[['index', 'particle_id', 'module_id', 'z']].assign(r=r, phi=phi)
+
+            # Remove duplicate true hits within same layer
+            if not self.duplicates:
+                endcap_0 = hits.groupby(['index']).get_group(0)
+                hits = hits.drop(hits.groupby(['index']).get_group(0).index)
+                endcap_1 = hits.groupby(['index']).get_group(1)
+                hits = hits.drop(hits.groupby(['index']).get_group(1).index)
+                endcap_2 = hits.groupby(['index']).get_group(2)
+                hits = hits.drop(hits.groupby(['index']).get_group(2).index)
+                endcap_3 = hits.groupby(['index']).get_group(3)
+                hits = hits.drop(hits.groupby(['index']).get_group(3).index)
+                endcap_4 = hits.groupby(['index']).get_group(4)
+                hits = hits.drop(hits.groupby(['index']).get_group(4).index)
+                endcap_10 = hits.groupby(['index']).get_group(10)
+                hits = hits.drop(hits.groupby(['index']).get_group(10).index)
+                endcap_11 = hits.groupby(['index']).get_group(11)
+                hits = hits.drop(hits.groupby(['index']).get_group(11).index)
+                endcap_12 = hits.groupby(['index']).get_group(12)
+                hits = hits.drop(hits.groupby(['index']).get_group(12).index)
+                endcap_13 = hits.groupby(['index']).get_group(13)
+                hits = hits.drop(hits.groupby(['index']).get_group(13).index)
+                endcap_14 = hits.groupby(['index']).get_group(14)
+                hits = hits.drop(hits.groupby(['index']).get_group(14).index)
+
+                # endcap_15 = hits.groupby(['index']).get_group(15)
+                # hits = hits.drop(hits.groupby(['index']).get_group(15).index)
+                # endcap_16 = hits.groupby(['index']).get_group(16)
+                # hits = hits.drop(hits.groupby(['index']).get_group(16).index)
+                # endcap_17 = hits.groupby(['index']).get_group(17)
+                # hits = hits.drop(hits.groupby(['index']).get_group(17).index)
+                # endcap_18 = hits.groupby(['index']).get_group(18)
+                # hits = hits.drop(hits.groupby(['index']).get_group(18).index)
+                # endcap_19 = hits.groupby(['index']).get_group(19)
+                # hits = hits.drop(hits.groupby(['index']).get_group(19).index)
+                # endcap_20 = hits.groupby(['index']).get_group(20)
+                # hits = hits.drop(hits.groupby(['index']).get_group(20).index)
+                # endcap_25 = hits.groupby(['index']).get_group(25)
+                # hits = hits.drop(hits.groupby(['index']).get_group(25).index)
+                # endcap_26 = hits.groupby(['index']).get_group(26)
+                # hits = hits.drop(hits.groupby(['index']).get_group(26).index)
+                # endcap_27 = hits.groupby(['index']).get_group(27)
+                # hits = hits.drop(hits.groupby(['index']).get_group(27).index)
+                # endcap_28 = hits.groupby(['index']).get_group(28)
+                # hits = hits.drop(hits.groupby(['index']).get_group(28).index)
+                # endcap_29 = hits.groupby(['index']).get_group(29)
+                # hits = hits.drop(hits.groupby(['index']).get_group(29).index)
+                # endcap_30 = hits.groupby(['index']).get_group(30)
+                # hits = hits.drop(hits.groupby(['index']).get_group(30).index)
+
+                hits = hits.loc[hits.groupby(['particle_id', 'index'], as_index=False).r.idxmin()]
+                hits = pandas.concat([hits, endcap_0, endcap_1, endcap_2, endcap_3, endcap_4, endcap_10, endcap_11, endcap_12, endcap_13, endcap_14])
+                # hits = pandas.concat([hits, endcap_0, endcap_1, endcap_2, endcap_3, endcap_4, endcap_10, endcap_11, endcap_12, endcap_13, endcap_14, endcap_15, endcap_16, endcap_17, endcap_18, endcap_19, endcap_20, endcap_25, endcap_26, endcap_27, endcap_28, endcap_29, endcap_30])
+
+            hits = hits.sort_values(by=['particle_id', 'r'])
+
+            layer = torch.from_numpy(hits['index'].values)
+            particle = torch.from_numpy(hits['particle_id'].values)
+            module = torch.from_numpy(hits['module_id'].values)
+
+            r = torch.from_numpy(hits['r'].values)
+            phi = torch.from_numpy(hits['phi'].values)
+            z = torch.from_numpy(hits['z'].values)
+
+            for ii in range(particle.shape[0]-self.N_modules+1):
+                if (self.N_modules==2 and particle[ii] == particle[ii+1]):
+                    connection = np.array([layer[ii].numpy(), module[ii].numpy(), layer[ii+1].numpy(), module[ii+1].numpy()])
+                    module_map.append(connection)
+                if (self.N_modules==3 and particle[ii] == particle[ii+1] and particle[ii] == particle[ii+2]):
+                    connection = np.array([layer[ii].numpy(), module[ii].numpy(), layer[ii+1].numpy(), module[ii+1].numpy(), layer[ii+2].numpy(), module[ii+2].numpy()])
+                    module_map.append(connection)
+
+        #             dr1 = r[ii+1] - r[ii]
+        #             dr2 = r[ii+2] - r[ii+1]
+        #             dz1 = z[ii+1] - z[ii]
+        #             dz2 = z[ii+2] - z[ii+1]
+        #             dphi1 = phi[ii+1] - phi[ii]
+        #             dphi2 = phi[ii+2] - phi[ii+1]
+        #             if(dphi1 > np.pi): dphi1 -= 2*np.pi
+        #             if(dphi1 < -np.pi): dphi1 += 2*np.pi
+        #             if(dphi2 > np.pi): dphi2 -= 2*np.pi
+        #             if(dphi2 < -np.pi): dphi2 += 2*np.pi
+        #
+        #             diff_phir.append(( dphi2 / dr2 ) - ( dphi1 / dr1 ))
+        #             diff_zr.append(( dz2 / dr2 ) - ( dz1 / dr1 ))
+        #
+        # diff_phir = np.asarray(diff_phir)
+        # diff_zr = np.asarray(diff_zr)
+        #
+        # for i in range(5000):
+        #     cut_phir = diff_phir[np.absolute(diff_phir) <= .00001*i]
+        #     if (cut_phir.shape[0] / diff_phir.shape[0] > .99):
+        #         phi_cut = .00001*i
+        #         print("diff_phi 99%value = ", phi_cut)
+        #         break
+        #
+        # for i in range(5000):
+        #     cut_zr = diff_zr[np.absolute(diff_zr) <= .001*i]
+        #     if (cut_zr.shape[0] / diff_zr.shape[0] > .99):
+        #         z_cut = .001*i
+        #         print("diff_z 99%value = ", z_cut)
+        #         break
+        #
+        # figp, (axp) = plt.subplots(1, 1, dpi=600, figsize=(6, 6))
+        # axp.hist(diff_phir, bins=100, range=(-phi_cut, phi_cut))
+        # axp.set_xlabel('diff_phir')
+        # axp.set_ylabel('frequency')
+        # axp.set_yscale('log')
+        # figp.savefig('hist_diff_phir.png')
+        #
+        # figz, (axz) = plt.subplots(1, 1, dpi=600, figsize=(6, 6))
+        # axz.hist(diff_zr, bins=100, range=(-z_cut, z_cut))
+        # axz.set_xlabel('diff_zr')
+        # axz.set_ylabel('frequency')
+        # axz.set_yscale('log')
+        # figz.savefig('hist_diff_zr.png')
+
+        module_map = np.array(module_map)
+        module_map, counts = np.unique(module_map, return_counts=True, axis=0)
+        module_map = np.concatenate((module_map, counts[:,None]), axis=1)
+        # print(module_map)
+        # print(module_map.shape)
+        # np.savez_compressed('/data/gnn_code/module_map_atlas.npz', module_map)
+        # np.savetxt('/data/gnn_code/module_map_atlas.csv', module_map, delimiter=',')
+        # np.savez_compressed('/data/gnn_code/module_map_atlas_triplet.npz', module_map)
+        # np.savetxt('/data/gnn_code/module_map_atlas_triplet.csv', module_map, delimiter=',')
+
+
+
+
     def process(self, reprocess=False):
         print('Constructing Graphs using n_workers = ' + str(self.n_workers))
         task_paths = np.array_split(self.processed_paths, self.n_tasks)
@@ -748,8 +1249,8 @@ class TrackMLParticleTrackingDataset(Dataset):
     def process_event(self, idx):
         hits, particles, truth = self.read_event(idx)
 
-        if (self.mmap):
-            module_map = self.build_module_map(hits, particles, truth)
+        # if (self.mmap):
+        #     module_map = self.build_module_map(hits, particles, truth)
 
         if self.data_type == "TrackML":
             pos, layer, particle, eta = self.select_hits(hits, particles, truth)
@@ -771,7 +1272,10 @@ class TrackMLParticleTrackingDataset(Dataset):
         pos_sect, layer_sect, particle_sect = self.split_detector_sections(pos, layer, particle, eta, phi_edges, eta_edges)
 
         for i in range(len(pos_sect)):
-            edge_index = self.compute_edge_index(pos_sect[i], layer_sect[i])
+            if (self.N_modules==2):
+                edge_index = self.compute_edge_index(pos_sect[i], layer_sect[i], particle_sect[i])
+            elif (self.N_modules==3):
+                edge_index = self.compute_edge_index_triplet(pos_sect[i], layer_sect[i], particle_sect[i])
             y = self.compute_y_index(edge_index, particle_sect[i])
 
             edge_votes = torch.zeros(edge_index.shape[1], 0, dtype=torch.long)
@@ -790,13 +1294,11 @@ class TrackMLParticleTrackingDataset(Dataset):
                 data.y = torch.cat([data.y,data.y])
                 data.edge_attr = torch.cat([data.edge_attr,data.edge_attr])
 
+            torch.save(data, osp.join(self.processed_dir, 'event{}_section{}.pt'.format(idx, i)))
 
             if (self.augments):
-                data_a = copy.deepcopy(data)
-                data_a.x[:,1]= -data_a.x[:,1]
-                torch.save(data_a, osp.join(self.processed_dir, 'event{}_section{}_aug.pt'.format(idx, i)))
-
-            torch.save(data, osp.join(self.processed_dir, 'event{}_section{}.pt'.format(idx, i)))
+                data.x[:,1]= -data.x[:,1]
+                torch.save(data, osp.join(self.processed_dir, 'event{}_section{}_aug.pt'.format(idx, i)))
 
         # if self.pre_filter is not None and not self.pre_filter(data):
         #     continue
@@ -990,7 +1492,7 @@ class TrackMLParticleTrackingDataset(Dataset):
         truth.loc[truth['hardware'] == 'STRIP','barrel_endcap'] = truth.loc[truth['hardware'] == 'STRIP','barrel_endcap'] + 100
 
         hits = (truth[['hit_id', 'x', 'y', 'z', 'barrel_endcap', 'layer_disk', 'particle_id']]
-                .merge(particles[['particle_id', 'pt', 'eta']], on='particle_id'))
+                .merge(particles[['particle_id', 'pt', 'eta', 'barcode']], on='particle_id'))
 
         layer = torch.from_numpy(20 * hits['barrel_endcap'].values + hits['layer_disk'].values)
         r = torch.from_numpy(np.sqrt(hits['x'].values**2 + hits['y'].values**2))
@@ -999,6 +1501,7 @@ class TrackMLParticleTrackingDataset(Dataset):
         pt = torch.from_numpy(hits['pt'].values/1000)
         eta = torch.from_numpy(hits['eta'].values)
         particle = torch.from_numpy(hits['particle_id'].values)
+        barcode = torch.from_numpy(hits['barcode'].values)
 
         # layer_mask = torch.from_numpy(np.isin(layer, valid_layer))
         pt_mask_lo = pt > self.pt_range[0]
@@ -1018,6 +1521,7 @@ class TrackMLParticleTrackingDataset(Dataset):
         layer = layer[mask]
         pt = pt[mask]
         eta = eta[mask]
+        barcode = barcode[mask]
 
         particle, indices = torch.sort(particle)
         particle_i = particle.unique(return_inverse=True)[1]
@@ -1025,20 +1529,26 @@ class TrackMLParticleTrackingDataset(Dataset):
         layer = layer[indices]
         pt = pt[indices]
         eta = eta[indices]
+        barcode = barcode[indices]
 
-        track_attr = torch.cat((particle[:,None].type(torch.float64), pt[:,None].type(torch.float64), eta[:,None].type(torch.float64)), 1)
+        # track_attr = torch.cat((particle[:,None].type(torch.float64), pt[:,None].type(torch.float64), eta[:,None].type(torch.float64)), 1)
+        track_attr = torch.cat((particle[:,None].type(torch.float64), pt[:,None].type(torch.float64), eta[:,None].type(torch.float64), barcode[:,None].type(torch.float64)), 1)
         track_attr, hit_count = track_attr.unique(dim=0, return_counts=True)
         track_attr = torch.cat((track_attr, hit_count[:,None].type(torch.float64)),1)
 
-        track_attr_pix = torch.cat((particle[layer<15][:,None].type(torch.float64), pt[layer<15][:,None].type(torch.float64), eta[layer<15][:,None].type(torch.float64)), 1)
+        # track_attr_pix = torch.cat((particle[layer<15][:,None].type(torch.float64), pt[layer<15][:,None].type(torch.float64), eta[layer<15][:,None].type(torch.float64)), 1)
+        track_attr_pix = torch.cat((particle[layer<15][:,None].type(torch.float64), pt[layer<15][:,None].type(torch.float64), eta[layer<15][:,None].type(torch.float64), barcode[layer<15][:,None].type(torch.float64)), 1)
         track_attr_pix, hit_count_pix = track_attr_pix.unique(dim=0, return_counts=True)
         track_attr_pix = torch.cat((track_attr_pix, hit_count_pix[:,None].type(torch.float64)),1)
 
-        track_attr_pruned = torch.cat((particle[layer<15][:,None].type(torch.float64), pt[layer<15][:,None].type(torch.float64), eta[layer<15][:,None].type(torch.float64), layer[layer<15][:,None].type(torch.float64)), 1)
+        # track_attr_pruned = torch.cat((particle[layer<15][:,None].type(torch.float64), pt[layer<15][:,None].type(torch.float64), eta[layer<15][:,None].type(torch.float64), layer[layer<15][:,None].type(torch.float64)), 1)
+        track_attr_pruned = torch.cat((particle[layer<15][:,None].type(torch.float64), pt[layer<15][:,None].type(torch.float64), eta[layer<15][:,None].type(torch.float64), barcode[layer<15][:,None].type(torch.float64), layer[layer<15][:,None].type(torch.float64)), 1)
         track_attr_pruned = track_attr_pruned.unique(dim=0)
-        track_attr_pruned = torch.index_select(track_attr_pruned, 1, torch.tensor([0,1,2]))
+        # track_attr_pruned = torch.index_select(track_attr_pruned, 1, torch.tensor([0,1,2]))
+        track_attr_pruned = torch.index_select(track_attr_pruned, 1, torch.tensor([0,1,2,3]))
         track_attr_pruned, hit_count_pruned = track_attr_pruned.unique(dim=0, return_counts=True)
         track_attr_pruned = torch.cat((track_attr_pruned, hit_count_pruned[:,None].type(torch.float64)),1)
+
 
         tracks = torch.empty(0,6, dtype=torch.float64)
         for i in range(particle_i.max()+1):
